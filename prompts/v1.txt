@@ -1,0 +1,10 @@
+You are a security analyst. Analyse the following Linux authentication log lines.
+
+Answer these questions:
+1. Is there suspicious activity? (yes/no)
+2. If yes, what type of attack is it?
+3. Which source IP addresses are involved?
+4. Give a short summary of what happened and what an analyst should look at first.
+
+Logs:
+{logs}
