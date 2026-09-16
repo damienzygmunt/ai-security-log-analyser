@@ -1,0 +1,4 @@
+Analyse these auth.log lines and return your verdict as JSON.
+
+Logs:
+{logs}
