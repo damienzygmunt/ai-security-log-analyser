@@ -84,3 +84,28 @@ passed to the model, leaving the model to interpret the pattern.
 - Add few-shot examples, including a "message repeated" line with its correct count
 - Test whether examples improve the count and the first_action
 
+## v3 – counting rule + few-shot examples (prompts/v3_system.txt, prompts/v2_user.txt)
+v2 system prompt plus an explicit counting rule and three worked examples:
+external brute force (with a "message repeated" line), a normal login, and
+failures from a private IP. Examples use made-up IPs and users. User prompt
+unchanged from v2 so only one thing changed.
+
+### What improved
+- failed_attempts: 10 (v2 said 8, actual 12). Counting rule helped, but still wrong
+
+### What got worse
+- Called the activity "external brute force"; lost the private-IP observation v2 made
+- first_action was "block 10.0.3.2 at the firewall", which would cut off my own host
+- Summary and first_action copy Example 1's wording almost exactly. The model
+  matched the closest-looking example instead of applying Example 3's reasoning
+  about private addresses
+
+### Takeaway
+Few-shot examples changed the output style more than the reasoning. With an 8B
+model, examples can be copied rather than generalised. Counting is still
+unreliable even with explicit rules, so it belongs in code.
+
+### Next
+- Compute failed attempts per IP in Python and pass the counts to the model
+- Check private vs public IPs in Python (ipaddress module) instead of relying on the model
+- Test with a log containing public IPs and legitimate logins
