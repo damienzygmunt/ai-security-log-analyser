@@ -140,3 +140,35 @@ follow reasoning rules for the recommended action.
 - Test with a log that has multiple IPs (public and private) and a normal login
 - Consider a Python guardrail that flags a "block" action for private IPs
 - Prompt-injection testing
+
+## Multi-IP test (samples/multi_ip_auth.log, v4 prompts)
+Synthetic 80-line log with five sources and a known answer written before the
+run (samples/multi_ip_expected.md). The main test is prioritisation: the loudest
+source (203.0.113.45, 15 failures) is not the most dangerous. 198.51.100.23 had
+3 failures, then a successful sysadmin login, then ran sudo cat /etc/shadow.
+
+### Correct
+- failed_attempts: 25, matches parser
+- source_ips listed exactly the three suspicious sources
+- No false positives: alice's single typo and deploy's key logins not flagged
+- targeted_users complete and correct
+
+### Wrong
+- Missed the compromise: described 198.51.100.23 as "attempting to login",
+  although the parser facts showed 1 successful login
+- Missed the sudo cat /etc/shadow after that login (not in parser facts,
+  only in the raw log)
+- first_action: "block 203.0.113.45 and 192.168.1.50". Went for the loudest
+  source and blocked a private IP, instead of investigating the successful login
+- Summary said 192.168.1.50 targeted multiple accounts; it only targeted backup
+
+### Takeaway
+Correct facts are not enough. The model weighted failure volume over the one
+signal that mattered (a success after failures). For a triage tool, missing a
+compromise is the worst failure mode. High-risk patterns should be detected in
+code and flagged explicitly, not left for the model to notice.
+
+### Next
+- Parser: flag "failed then successful login from same IP" as a compromise indicator
+- Parser: capture sudo commands run after a suspicious login
+- Rank sources by risk in code and pass that ranking to the model
