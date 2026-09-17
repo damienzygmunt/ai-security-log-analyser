@@ -16,6 +16,9 @@ Usage:
 
     v5 (risk-ranked facts, used when the prompt contains {risk_facts}):
         python analyser.py auth.log --system prompts/v5_system.txt --prompt prompts/v5_user.txt --json
+
+    Add --check to run the parser checks and guardrail on any JSON run, e.g.
+        python analyser.py auth.log --system prompts/v2_system.txt --prompt prompts/v2_user.txt --json --check
 """
 
 import argparse
@@ -60,13 +63,25 @@ def read_last_lines(log_path: Path, n: int) -> str:
 
 # --- Log parsing -----------------------------------------------------------
 
+# The username in sshd lines is chosen by whoever connects, so it is attacker-
+# controlled text. Patterns are therefore:
+#   - anchored to the start of the line (timestamp, host, program), so text
+#     inside a username can't be mistaken for a separate log entry
+#   - greedy on the username, so the LAST "from <ip> port <n>" in the line is
+#     used and a username can't spoof a different source IP
+PREFIX = r"^(?P<ts>\d{4}-\d{2}-\d{2}T\S+|\w{3}\s+\d+\s[\d:]+) \S+ "
+SSHD = r"sshd(?:-session)?\[\d+\]: "
 IP = r"(?P<ip>[0-9A-Fa-f:.]+)"
-USER = r"(?:invalid user )?(?P<user>\S+)"
-FAILED_RE = re.compile(rf"(?<!\[ )Failed password for {USER} from {IP} port")
-REPEATED_RE = re.compile(rf"message repeated (?P<n>\d+) times: \[ Failed password for {USER} from {IP} port")
-ACCEPTED_RE = re.compile(rf"Accepted \S+ for {USER} from {IP} port")
-SUDO_RE = re.compile(r"sudo(?:\[\d+\])?:\s+(?P<user>\S+) : .*COMMAND=(?P<cmd>.+)$")
-TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T[\d:.]+\S*|\w{3}\s+\d+\s[\d:]+)")
+USER = r"(?:invalid user )?(?P<user>.*)"
+FAILED_RE = re.compile(rf"{PREFIX}{SSHD}Failed password for {USER} from {IP} port \d+")
+REPEATED_RE = re.compile(rf"{PREFIX}{SSHD}message repeated (?P<n>\d+) times: \[ Failed password for {USER} from {IP} port \d+")
+ACCEPTED_RE = re.compile(rf"{PREFIX}{SSHD}Accepted \S+ for {USER} from {IP} port \d+")
+SUDO_RE = re.compile(rf"{PREFIX}sudo(?:\[\d+\])?:\s+(?P<user>\S+) : .*COMMAND=(?P<cmd>.+)$")
+
+# Valid Linux usernames: no spaces, max 32 characters. Anything else in a
+# username field is treated as possibly injected text and never passed to the
+# model through the facts.
+VALID_USERNAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9._-]{0,31}\$?$")
 
 # Internal address ranges. Checked explicitly because Python's is_private
 # also covers documentation ranges (e.g. 203.0.113.0/24), which test logs use
@@ -88,6 +103,13 @@ SENSITIVE_COMMANDS = ("/etc/shadow", "/etc/passwd", "/etc/sudoers", "useradd", "
 def is_internal(ip) -> bool:
     """True if the address is in a private, loopback or link-local range."""
     return any(ip.version == net.version and ip in net for net in INTERNAL_NETWORKS)
+
+
+def safe_username(name: str) -> tuple[str, bool]:
+    """Return (name to show, is_valid). Invalid names are replaced by a placeholder."""
+    if VALID_USERNAME_RE.match(name):
+        return name, True
+    return f"[invalid username, {len(name)} chars]", False
 
 
 def extract_facts(logs: str) -> dict:
@@ -114,7 +136,11 @@ def extract_facts(logs: str) -> dict:
             "first_seen": timestamp,
             "last_seen": timestamp,
             "success_after_failures": [],   # (line number, user, failures before it)
+            "invalid_usernames": 0,
         })
+        user, valid = safe_username(user)
+        if not valid:
+            entry["invalid_usernames"] += 1
         if accepted and entry["failed_attempts"] >= COMPROMISE_MIN_FAILURES:
             entry["success_after_failures"].append((lineno, user, entry["failed_attempts"]))
         entry["failed_attempts"] += failed
@@ -125,15 +151,13 @@ def extract_facts(logs: str) -> dict:
             entry["last_seen"] = timestamp
 
     for lineno, line in enumerate(logs.splitlines()):
-        ts_match = TIMESTAMP_RE.match(line)
-        ts = ts_match.group(1) if ts_match else None
-        if m := REPEATED_RE.search(line):
-            record(m["ip"], m["user"], lineno, ts, failed=int(m["n"]))
-        elif m := FAILED_RE.search(line):
-            record(m["ip"], m["user"], lineno, ts, failed=1)
-        elif m := ACCEPTED_RE.search(line):
-            record(m["ip"], m["user"], lineno, ts, accepted=1)
-        elif m := SUDO_RE.search(line):
+        if m := REPEATED_RE.match(line):
+            record(m["ip"], m["user"], lineno, m["ts"], failed=int(m["n"]))
+        elif m := FAILED_RE.match(line):
+            record(m["ip"], m["user"], lineno, m["ts"], failed=1)
+        elif m := ACCEPTED_RE.match(line):
+            record(m["ip"], m["user"], lineno, m["ts"], accepted=1)
+        elif m := SUDO_RE.match(line):
             sudo_events.append((lineno, m["user"], m["cmd"].strip()))
 
     ips = list(per_ip.values())
@@ -178,6 +202,10 @@ def score_risk(entry: dict) -> None:
     if len(entry["users"]) >= MANY_USERS and entry["failed_attempts"]:
         score += 10
         reasons.append(f"{len(entry['users'])} different usernames tried")
+    if entry["invalid_usernames"]:
+        score += 20
+        reasons.append(f"{entry['invalid_usernames']} login attempts with invalid usernames "
+                       "(text that is not a real username, possible log/prompt injection)")
     if not entry["private"] and entry["failed_attempts"]:
         score += 10
         reasons.append("public source address")
@@ -302,6 +330,11 @@ def guardrail(verdict: dict, facts: dict) -> None:
     action = verdict.get("first_action", "")
     warnings = []
 
+    risky = [e for e in facts["source_ips"] if e["risk_level"] in ("critical", "high")]
+    if risky and verdict.get("suspicious") is False:
+        warnings.append("model says nothing is suspicious, but the parser rates "
+                        + ", ".join(f"{e['ip']} {e['risk_level']}" for e in risky))
+
     for e in facts["source_ips"]:
         if e["private"] and e["ip"] in action and re.search(r"\bblock", action, re.I):
             warnings.append(f"first_action blocks internal address {e['ip']}; "
@@ -327,6 +360,8 @@ def main() -> int:
     parser.add_argument("--system", type=Path, help="optional system prompt file")
     parser.add_argument("--json", action="store_true", help="require structured JSON output")
     parser.add_argument("--ctx", type=int, default=8192, help="model context size in tokens (default: 8192)")
+    parser.add_argument("--check", action="store_true",
+                        help="with --json: run the parser checks and guardrail even if the prompt has no facts")
     args = parser.parse_args()
 
     for label, path in [("log file", args.logfile), ("prompt file", args.prompt), ("system prompt file", args.system)]:
@@ -342,7 +377,8 @@ def main() -> int:
     template = args.prompt.read_text(encoding="utf-8")
     uses_facts = "{facts}" in template
     uses_risk = "{risk_facts}" in template
-    facts = extract_facts(logs) if (uses_facts or uses_risk) else None
+    run_checks = args.json and (uses_facts or uses_risk or args.check)
+    facts = extract_facts(logs) if (uses_facts or uses_risk or run_checks) else None
     values = {"logs": logs}
     if uses_facts:
         values["facts"] = format_facts(facts)
@@ -386,10 +422,10 @@ def main() -> int:
             print(f"Invalid JSON from model: {e}\nRaw reply:\n{reply}", file=sys.stderr)
             return 1
         print(json.dumps(verdict, indent=2))
-        if facts:
+        if run_checks:
             print("-" * 60)
             check_against_facts(verdict, facts)
-            if uses_risk:
+            if uses_risk or args.check:
                 guardrail(verdict, facts)
     else:
         print(reply.strip())
