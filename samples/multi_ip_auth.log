@@ -1,0 +1,80 @@
+2026-09-17T08:00:00.000000+00:00 web01 CRON[3007]: pam_unix(cron:session): session opened for user root(uid=0) by root(uid=0)
+2026-09-17T08:00:01.000000+00:00 web01 CRON[3007]: pam_unix(cron:session): session closed for user root
+2026-09-17T08:02:00.000000+00:00 web01 sshd[3035]: Accepted publickey for deploy from 192.168.1.20 port 50220 ssh2: ED25519 SHA256:q3Vd8kL0ZrT1mX7pYb2Wc9Hn4Js6Ga5Ue0Rf1Ko8Mi
+2026-09-17T08:02:00.000000+00:00 web01 sshd[3035]: pam_unix(sshd:session): session opened for user deploy(uid=1002) by deploy(uid=0)
+2026-09-17T08:03:30.000000+00:00 web01 sshd[3035]: pam_unix(sshd:session): session closed for user deploy
+2026-09-17T08:05:00.000000+00:00 web01 sshd[3049]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=10.0.0.5  user=alice
+2026-09-17T08:05:02.000000+00:00 web01 sshd[3049]: Failed password for alice from 10.0.0.5 port 52211 ssh2
+2026-09-17T08:05:08.000000+00:00 web01 sshd[3049]: Accepted password for alice from 10.0.0.5 port 52211 ssh2
+2026-09-17T08:05:08.000000+00:00 web01 sshd[3049]: pam_unix(sshd:session): session opened for user alice(uid=1001) by alice(uid=0)
+2026-09-17T08:05:20.000000+00:00 web01 sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/systemctl restart nginx
+2026-09-17T08:05:20.000000+00:00 web01 sudo: pam_unix(sudo:session): session opened for user root(uid=0) by alice(uid=1001)
+2026-09-17T08:05:21.000000+00:00 web01 sudo: pam_unix(sudo:session): session closed for user root
+2026-09-17T08:10:00.000000+00:00 web01 sshd[3056]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.45  user=root
+2026-09-17T08:10:01.000000+00:00 web01 sshd[3056]: Failed password for root from 203.0.113.45 port 41000 ssh2
+2026-09-17T08:10:03.000000+00:00 web01 sshd[3056]: message repeated 2 times: [ Failed password for root from 203.0.113.45 port 41000 ssh2]
+2026-09-17T08:10:03.000000+00:00 web01 sshd[3056]: Connection closed by authenticating user root 203.0.113.45 port 41000 [preauth]
+2026-09-17T08:10:03.000000+00:00 web01 sshd[3056]: PAM 2 more authentication failures; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.45  user=root
+2026-09-17T08:10:06.000000+00:00 web01 sshd[3063]: Invalid user admin from 203.0.113.45 port 41003
+2026-09-17T08:10:06.000000+00:00 web01 sshd[3063]: pam_unix(sshd:auth): check pass; user unknown
+2026-09-17T08:10:06.000000+00:00 web01 sshd[3063]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.45
+2026-09-17T08:10:07.000000+00:00 web01 sshd[3063]: Failed password for invalid user admin from 203.0.113.45 port 41003 ssh2
+2026-09-17T08:10:09.000000+00:00 web01 sshd[3063]: message repeated 2 times: [ Failed password for invalid user admin from 203.0.113.45 port 41003 ssh2]
+2026-09-17T08:10:09.000000+00:00 web01 sshd[3063]: Connection closed by invalid user admin 203.0.113.45 port 41003 [preauth]
+2026-09-17T08:10:09.000000+00:00 web01 sshd[3063]: PAM 2 more authentication failures; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.45
+2026-09-17T08:10:12.000000+00:00 web01 sshd[3070]: Invalid user test from 203.0.113.45 port 41006
+2026-09-17T08:10:12.000000+00:00 web01 sshd[3070]: pam_unix(sshd:auth): check pass; user unknown
+2026-09-17T08:10:12.000000+00:00 web01 sshd[3070]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.45
+2026-09-17T08:10:13.000000+00:00 web01 sshd[3070]: Failed password for invalid user test from 203.0.113.45 port 41006 ssh2
+2026-09-17T08:10:15.000000+00:00 web01 sshd[3070]: message repeated 2 times: [ Failed password for invalid user test from 203.0.113.45 port 41006 ssh2]
+2026-09-17T08:10:15.000000+00:00 web01 sshd[3070]: Connection closed by invalid user test 203.0.113.45 port 41006 [preauth]
+2026-09-17T08:10:15.000000+00:00 web01 sshd[3070]: PAM 2 more authentication failures; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.45
+2026-09-17T08:10:18.000000+00:00 web01 sshd[3077]: Invalid user oracle from 203.0.113.45 port 41009
+2026-09-17T08:10:18.000000+00:00 web01 sshd[3077]: pam_unix(sshd:auth): check pass; user unknown
+2026-09-17T08:10:18.000000+00:00 web01 sshd[3077]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.45
+2026-09-17T08:10:19.000000+00:00 web01 sshd[3077]: Failed password for invalid user oracle from 203.0.113.45 port 41009 ssh2
+2026-09-17T08:10:21.000000+00:00 web01 sshd[3077]: message repeated 2 times: [ Failed password for invalid user oracle from 203.0.113.45 port 41009 ssh2]
+2026-09-17T08:10:21.000000+00:00 web01 sshd[3077]: Connection closed by invalid user oracle 203.0.113.45 port 41009 [preauth]
+2026-09-17T08:10:21.000000+00:00 web01 sshd[3077]: PAM 2 more authentication failures; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.45
+2026-09-17T08:10:24.000000+00:00 web01 sshd[3084]: Invalid user ubuntu from 203.0.113.45 port 41012
+2026-09-17T08:10:24.000000+00:00 web01 sshd[3084]: pam_unix(sshd:auth): check pass; user unknown
+2026-09-17T08:10:24.000000+00:00 web01 sshd[3084]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.45
+2026-09-17T08:10:25.000000+00:00 web01 sshd[3084]: Failed password for invalid user ubuntu from 203.0.113.45 port 41012 ssh2
+2026-09-17T08:10:27.000000+00:00 web01 sshd[3084]: message repeated 2 times: [ Failed password for invalid user ubuntu from 203.0.113.45 port 41012 ssh2]
+2026-09-17T08:10:27.000000+00:00 web01 sshd[3084]: Connection closed by invalid user ubuntu 203.0.113.45 port 41012 [preauth]
+2026-09-17T08:10:27.000000+00:00 web01 sshd[3084]: PAM 2 more authentication failures; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.45
+2026-09-17T08:15:00.000000+00:00 web01 CRON[3014]: pam_unix(cron:session): session opened for user root(uid=0) by root(uid=0)
+2026-09-17T08:15:00.000000+00:00 web01 sshd[3091]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.168.1.50  user=backup
+2026-09-17T08:15:01.000000+00:00 web01 CRON[3014]: pam_unix(cron:session): session closed for user root
+2026-09-17T08:15:01.000000+00:00 web01 sshd[3091]: Failed password for backup from 192.168.1.50 port 38000 ssh2
+2026-09-17T08:15:02.000000+00:00 web01 sshd[3091]: Failed password for backup from 192.168.1.50 port 38000 ssh2
+2026-09-17T08:15:02.000000+00:00 web01 sshd[3091]: Connection closed by authenticating user backup 192.168.1.50 port 38000 [preauth]
+2026-09-17T08:20:00.000000+00:00 web01 sshd[3098]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.168.1.50  user=backup
+2026-09-17T08:20:00.000000+00:00 web01 sshd[3112]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=198.51.100.23  user=sysadmin
+2026-09-17T08:20:01.000000+00:00 web01 sshd[3098]: Failed password for backup from 192.168.1.50 port 38001 ssh2
+2026-09-17T08:20:02.000000+00:00 web01 sshd[3098]: Failed password for backup from 192.168.1.50 port 38001 ssh2
+2026-09-17T08:20:02.000000+00:00 web01 sshd[3098]: Connection closed by authenticating user backup 192.168.1.50 port 38001 [preauth]
+2026-09-17T08:20:02.000000+00:00 web01 sshd[3112]: Failed password for sysadmin from 198.51.100.23 port 60010 ssh2
+2026-09-17T08:20:04.000000+00:00 web01 sshd[3112]: Connection closed by authenticating user sysadmin 198.51.100.23 port 60010 [preauth]
+2026-09-17T08:22:00.000000+00:00 web01 sshd[3119]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=198.51.100.23  user=sysadmin
+2026-09-17T08:22:02.000000+00:00 web01 sshd[3119]: Failed password for sysadmin from 198.51.100.23 port 60011 ssh2
+2026-09-17T08:22:04.000000+00:00 web01 sshd[3119]: Connection closed by authenticating user sysadmin 198.51.100.23 port 60011 [preauth]
+2026-09-17T08:24:00.000000+00:00 web01 sshd[3126]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=198.51.100.23  user=sysadmin
+2026-09-17T08:24:02.000000+00:00 web01 sshd[3126]: Failed password for sysadmin from 198.51.100.23 port 60012 ssh2
+2026-09-17T08:24:04.000000+00:00 web01 sshd[3126]: Connection closed by authenticating user sysadmin 198.51.100.23 port 60012 [preauth]
+2026-09-17T08:25:00.000000+00:00 web01 sshd[3042]: Accepted publickey for deploy from 192.168.1.20 port 51600 ssh2: ED25519 SHA256:q3Vd8kL0ZrT1mX7pYb2Wc9Hn4Js6Ga5Ue0Rf1Ko8Mi
+2026-09-17T08:25:00.000000+00:00 web01 sshd[3042]: pam_unix(sshd:session): session opened for user deploy(uid=1002) by deploy(uid=0)
+2026-09-17T08:25:00.000000+00:00 web01 sshd[3105]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.168.1.50  user=backup
+2026-09-17T08:25:01.000000+00:00 web01 sshd[3105]: Failed password for backup from 192.168.1.50 port 38002 ssh2
+2026-09-17T08:25:02.000000+00:00 web01 sshd[3105]: Failed password for backup from 192.168.1.50 port 38002 ssh2
+2026-09-17T08:25:02.000000+00:00 web01 sshd[3105]: Connection closed by authenticating user backup 192.168.1.50 port 38002 [preauth]
+2026-09-17T08:26:30.000000+00:00 web01 sshd[3042]: pam_unix(sshd:session): session closed for user deploy
+2026-09-17T08:26:40.000000+00:00 web01 sshd[3133]: Accepted password for sysadmin from 198.51.100.23 port 60020 ssh2
+2026-09-17T08:26:40.000000+00:00 web01 sshd[3133]: pam_unix(sshd:session): session opened for user sysadmin(uid=1000) by sysadmin(uid=0)
+2026-09-17T08:26:52.000000+00:00 web01 sudo: sysadmin : TTY=pts/1 ; PWD=/home/sysadmin ; USER=root ; COMMAND=/usr/bin/cat /etc/shadow
+2026-09-17T08:26:52.000000+00:00 web01 sudo: pam_unix(sudo:session): session opened for user root(uid=0) by sysadmin(uid=1000)
+2026-09-17T08:26:53.000000+00:00 web01 sudo: pam_unix(sudo:session): session closed for user root
+2026-09-17T08:30:00.000000+00:00 web01 CRON[3021]: pam_unix(cron:session): session opened for user root(uid=0) by root(uid=0)
+2026-09-17T08:30:01.000000+00:00 web01 CRON[3021]: pam_unix(cron:session): session closed for user root
+2026-09-17T08:45:00.000000+00:00 web01 CRON[3028]: pam_unix(cron:session): session opened for user root(uid=0) by root(uid=0)
+2026-09-17T08:45:01.000000+00:00 web01 CRON[3028]: pam_unix(cron:session): session closed for user root

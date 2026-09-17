@@ -66,6 +66,21 @@ ACCEPTED_RE = re.compile(rf"Accepted \S+ for {USER} from {IP} port")
 TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T[\d:.]+\S*|\w{3}\s+\d+\s[\d:]+)")
 
 
+# Internal address ranges. Checked explicitly because Python's is_private
+# also covers documentation ranges (e.g. 203.0.113.0/24), which test logs use
+# to stand in for public attackers.
+INTERNAL_NETWORKS = [ipaddress.ip_network(n) for n in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",   # RFC 1918
+    "127.0.0.0/8", "169.254.0.0/16",                    # loopback, link-local
+    "::1/128", "fc00::/7", "fe80::/10",                 # IPv6 equivalents
+)]
+
+
+def is_internal(ip) -> bool:
+    """True if the address is in a private, loopback or link-local range."""
+    return any(ip.version == net.version and ip in net for net in INTERNAL_NETWORKS)
+
+
 def extract_facts(logs: str) -> dict:
     """Count failed and successful SSH logins per source IP.
 
@@ -82,9 +97,7 @@ def extract_facts(logs: str) -> dict:
             return
         entry = per_ip.setdefault(str(ip), {
             "ip": str(ip),
-            # Note: is_private is also True for reserved/documentation ranges
-            # (e.g. 192.0.2.0/24), so test data should use real public IPs
-            "private": ip.is_private,
+            "private": is_internal(ip),
             "failed_attempts": 0,
             "successful_logins": 0,
             "users": set(),
@@ -188,10 +201,13 @@ def check_against_facts(verdict: dict, facts: dict) -> None:
     status = "OK" if got == expected else "MISMATCH"
     print(f"Check failed_attempts: model {got}, parser {expected} -> {status}")
 
-    expected_ips = {e["ip"] for e in facts["source_ips"] if e["failed_attempts"]}
     got_ips = set(verdict.get("source_ips", []))
-    status = "OK" if expected_ips <= got_ips else "MISSING " + ", ".join(sorted(expected_ips - got_ips))
-    print(f"Check source_ips with failures: {status}")
+    missing = [e for e in facts["source_ips"] if e["failed_attempts"] and e["ip"] not in got_ips]
+    if not missing:
+        print("Check source_ips with failures: OK (all listed)")
+    else:
+        details = ", ".join(f"{e['ip']} ({e['failed_attempts']} failed)" for e in missing)
+        print(f"Check source_ips with failures: not listed by model: {details}")
 
 
 def main() -> int:
