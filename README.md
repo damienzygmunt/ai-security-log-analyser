@@ -42,6 +42,12 @@ v2 – system prompt, structured JSON answer:
 python analyser.py auth.log --system prompts/v2_system.txt --prompt prompts/v2_user.txt --json
 ```
 
+v3 – adds a counting rule and few-shot examples (user prompt unchanged from v2):
+
+```
+python analyser.py auth.log --system prompts/v3_system.txt --prompt prompts/v2_user.txt --json
+```
+
 Options:
 
 | Option | Default | Description |
@@ -77,6 +83,7 @@ Logs come from my own Ubuntu Server VM. I generated repeated failed SSH logins a
 |---|---|---|---|---|---|
 | v1 – plain prompt | Yes | Correct | No | Not reported | No |
 | v2 – system prompt + JSON | Yes | Correct | Yes | 8 (wrong) | Yes |
+| v3 – counting rule + few-shot | Yes | Correct | No (called it external) | 10 (wrong) | Yes |
 
 Full notes in [PROMPT_NOTES.md](PROMPT_NOTES.md).
 
@@ -85,6 +92,7 @@ Full notes in [PROMPT_NOTES.md](PROMPT_NOTES.md).
 - Only the last N lines are analysed, so earlier activity can be missed.
 - The model miscounts failed attempts, particularly `message repeated N times` lines.
 - The model notes a private source IP but doesn't reason about it (v2 recommended blocking the host's own NAT address).
+- With few-shot examples, the model copies example wording instead of applying the reasoning (v3 repeated Example 1's "block at the firewall" action for a private IP).
 - Test data so far has a single source IP and no legitimate logins, so false positives aren't yet tested.
 - Only `auth.log` format is supported.
 - Log content is passed to the model, so crafted log lines could attempt prompt injection. Not yet tested.
@@ -93,8 +101,9 @@ Full notes in [PROMPT_NOTES.md](PROMPT_NOTES.md).
 
 - [x] v1: plain prompt
 - [x] v2: system prompt and structured JSON output
-- [ ] v3: few-shot examples
-- [ ] Compute exact counts in Python and pass them to the model
+- [x] v3: few-shot examples
+- [ ] Compute exact counts per IP in Python and pass them to the model
+- [ ] Classify private vs public IPs in Python (`ipaddress` module)
 - [ ] Test logs with multiple IPs and legitimate logins mixed in
 - [ ] Prompt-injection testing and defences
 
