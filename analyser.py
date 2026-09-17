@@ -11,9 +11,11 @@ Usage:
     v2 (system prompt, structured JSON answer):
         python analyser.py auth.log --system prompts/v2_system.txt --prompt prompts/v2_user.txt --json
 
-    v4 (parser facts passed to the model; used automatically when the
-        prompt template contains {facts}):
+    v4 (parser facts, used when the prompt contains {facts}):
         python analyser.py auth.log --system prompts/v4_system.txt --prompt prompts/v4_user.txt --json
+
+    v5 (risk-ranked facts, used when the prompt contains {risk_facts}):
+        python analyser.py auth.log --system prompts/v5_system.txt --prompt prompts/v5_user.txt --json
 """
 
 import argparse
@@ -63,8 +65,8 @@ USER = r"(?:invalid user )?(?P<user>\S+)"
 FAILED_RE = re.compile(rf"(?<!\[ )Failed password for {USER} from {IP} port")
 REPEATED_RE = re.compile(rf"message repeated (?P<n>\d+) times: \[ Failed password for {USER} from {IP} port")
 ACCEPTED_RE = re.compile(rf"Accepted \S+ for {USER} from {IP} port")
+SUDO_RE = re.compile(r"sudo(?:\[\d+\])?:\s+(?P<user>\S+) : .*COMMAND=(?P<cmd>.+)$")
 TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T[\d:.]+\S*|\w{3}\s+\d+\s[\d:]+)")
-
 
 # Internal address ranges. Checked explicitly because Python's is_private
 # also covers documentation ranges (e.g. 203.0.113.0/24), which test logs use
@@ -75,6 +77,13 @@ INTERNAL_NETWORKS = [ipaddress.ip_network(n) for n in (
     "::1/128", "fc00::/7", "fe80::/10",                 # IPv6 equivalents
 )]
 
+# Risk rules (v5). Kept as constants so they are easy to find and tune.
+COMPROMISE_MIN_FAILURES = 3      # failures before a success that count as a compromise indicator
+REPEATED_FAILURES = 5            # failures that count as persistent
+MANY_USERS = 3                   # distinct usernames that suggest username guessing
+SENSITIVE_COMMANDS = ("/etc/shadow", "/etc/passwd", "/etc/sudoers", "useradd", "usermod",
+                      "passwd", "chmod", "chown", "crontab", "wget", "curl", "nc ", "authorized_keys")
+
 
 def is_internal(ip) -> bool:
     """True if the address is in a private, loopback or link-local range."""
@@ -82,15 +91,16 @@ def is_internal(ip) -> bool:
 
 
 def extract_facts(logs: str) -> dict:
-    """Count failed and successful SSH logins per source IP.
+    """Parse SSH logins per source IP, plus sudo commands after suspicious logins.
 
     A 'message repeated N times: [ Failed password ... ]' line stands for
     N further failures. Other lines that describe the same attempts again
     (PAM summaries, connection resets) are deliberately not counted.
     """
     per_ip = {}
+    sudo_events = []   # (line number, user, command)
 
-    def record(ip_text, user, failed=0, accepted=0, timestamp=None):
+    def record(ip_text, user, lineno, timestamp, failed=0, accepted=0):
         try:
             ip = ipaddress.ip_address(ip_text)
         except ValueError:
@@ -103,7 +113,10 @@ def extract_facts(logs: str) -> dict:
             "users": set(),
             "first_seen": timestamp,
             "last_seen": timestamp,
+            "success_after_failures": [],   # (line number, user, failures before it)
         })
+        if accepted and entry["failed_attempts"] >= COMPROMISE_MIN_FAILURES:
+            entry["success_after_failures"].append((lineno, user, entry["failed_attempts"]))
         entry["failed_attempts"] += failed
         entry["successful_logins"] += accepted
         entry["users"].add(user)
@@ -111,19 +124,30 @@ def extract_facts(logs: str) -> dict:
             entry["first_seen"] = entry["first_seen"] or timestamp
             entry["last_seen"] = timestamp
 
-    for line in logs.splitlines():
+    for lineno, line in enumerate(logs.splitlines()):
         ts_match = TIMESTAMP_RE.match(line)
         ts = ts_match.group(1) if ts_match else None
         if m := REPEATED_RE.search(line):
-            record(m["ip"], m["user"], failed=int(m["n"]), timestamp=ts)
+            record(m["ip"], m["user"], lineno, ts, failed=int(m["n"]))
         elif m := FAILED_RE.search(line):
-            record(m["ip"], m["user"], failed=1, timestamp=ts)
+            record(m["ip"], m["user"], lineno, ts, failed=1)
         elif m := ACCEPTED_RE.search(line):
-            record(m["ip"], m["user"], accepted=1, timestamp=ts)
+            record(m["ip"], m["user"], lineno, ts, accepted=1)
+        elif m := SUDO_RE.search(line):
+            sudo_events.append((lineno, m["user"], m["cmd"].strip()))
 
-    ips = sorted(per_ip.values(), key=lambda e: e["failed_attempts"], reverse=True)
+    ips = list(per_ip.values())
     for entry in ips:
         entry["users"] = sorted(entry["users"])
+        # sudo commands run by a user after they logged in following failures
+        entry["sudo_after_suspicious_login"] = [
+            cmd for s_line, s_user, cmd in sudo_events
+            if any(s_line > l_line and s_user == l_user
+                   for l_line, l_user, _ in entry["success_after_failures"])
+        ]
+        score_risk(entry)
+
+    ips.sort(key=lambda e: e["failed_attempts"], reverse=True)
     return {
         "total_failed_attempts": sum(e["failed_attempts"] for e in ips),
         "total_successful_logins": sum(e["successful_logins"] for e in ips),
@@ -131,8 +155,48 @@ def extract_facts(logs: str) -> dict:
     }
 
 
+def score_risk(entry: dict) -> None:
+    """Add a risk score, level and list of reasons to a source IP entry."""
+    score, reasons = 0, []
+    if entry["success_after_failures"]:
+        _, user, n = entry["success_after_failures"][0]
+        score += 50
+        reasons.append(f"successful login as {user} after {n} failed attempts (possible compromise)")
+    sensitive = [c for c in entry["sudo_after_suspicious_login"]
+                 if any(s in c for s in SENSITIVE_COMMANDS)]
+    if sensitive:
+        score += 30
+        reasons.append("sensitive sudo commands after that login: " + "; ".join(sensitive))
+    elif entry["sudo_after_suspicious_login"]:
+        score += 10
+        reasons.append("sudo commands after that login: " + "; ".join(entry["sudo_after_suspicious_login"]))
+    if entry["failed_attempts"]:
+        score += min(entry["failed_attempts"], 20)
+    if entry["failed_attempts"] >= REPEATED_FAILURES:
+        score += 10
+        reasons.append(f"{entry['failed_attempts']} failed attempts")
+    if len(entry["users"]) >= MANY_USERS and entry["failed_attempts"]:
+        score += 10
+        reasons.append(f"{len(entry['users'])} different usernames tried")
+    if not entry["private"] and entry["failed_attempts"]:
+        score += 10
+        reasons.append("public source address")
+
+    if score >= 50:
+        level = "critical"
+    elif score >= 25:
+        level = "high"
+    elif score >= 10:
+        level = "medium"
+    elif score > 0:
+        level = "low"
+    else:
+        level = "none"
+    entry["risk_score"], entry["risk_level"], entry["risk_reasons"] = score, level, reasons
+
+
 def format_facts(facts: dict) -> str:
-    """Turn the parsed facts into plain lines for the prompt."""
+    """v4 fact lines: counts per IP, ordered by failed attempts."""
     if not facts["source_ips"]:
         return "- No SSH login attempts found."
     lines = [
@@ -146,16 +210,37 @@ def format_facts(facts: dict) -> str:
     return "\n".join(lines)
 
 
+def format_risk_facts(facts: dict) -> str:
+    """v5 fact lines: sources ranked by risk, with the reasons for each rank."""
+    if not facts["source_ips"]:
+        return "- No SSH login attempts found."
+    ranked = sorted(facts["source_ips"], key=lambda e: e["risk_score"], reverse=True)
+    lines = []
+    for rank, e in enumerate(ranked, 1):
+        lines.append(
+            f"{rank}. {e['ip']} - risk {e['risk_level'].upper()} (score {e['risk_score']}) - "
+            f"{'private' if e['private'] else 'public'} address, "
+            f"{e['failed_attempts']} failed, {e['successful_logins']} successful, "
+            f"users: {', '.join(e['users'])}"
+        )
+        for reason in e["risk_reasons"]:
+            lines.append(f"   - {reason}")
+    lines.append(f"Total failed attempts: {facts['total_failed_attempts']}")
+    lines.append(f"Total successful logins: {facts['total_successful_logins']}")
+    return "\n".join(lines)
+
+
 # --- Prompting ---------------------------------------------------------------
 
-def build_prompt(template_path: Path, logs: str, facts_text: str | None = None) -> str:
-    """Fill the {logs} (and optional {facts}) placeholders in the template."""
-    template = template_path.read_text(encoding="utf-8")
+PLACEHOLDER_RE = re.compile(r"\{(logs|facts|risk_facts)\}")
+
+
+def build_prompt(template: str, values: dict) -> str:
+    """Fill {logs}, {facts} and {risk_facts} placeholders in the template."""
     if "{logs}" not in template:
-        raise ValueError(f"{template_path} has no {{logs}} placeholder")
-    values = {"logs": logs, "facts": facts_text or ""}
+        raise ValueError("prompt template has no {logs} placeholder")
     # Single pass, so text inside the logs can never be treated as a placeholder
-    return re.sub(r"\{(logs|facts)\}", lambda m: values[m.group(1)], template)
+    return PLACEHOLDER_RE.sub(lambda m: values.get(m.group(1), ""), template)
 
 
 def ask_ollama(prompt: str, model: str, num_ctx: int,
@@ -194,6 +279,8 @@ def parse_verdict(text: str) -> dict:
     return verdict
 
 
+# --- Checks on the model's verdict ---------------------------------------------
+
 def check_against_facts(verdict: dict, facts: dict) -> None:
     """Compare the model's verdict with the parser's exact results."""
     expected = facts["total_failed_attempts"]
@@ -208,6 +295,27 @@ def check_against_facts(verdict: dict, facts: dict) -> None:
     else:
         details = ", ".join(f"{e['ip']} ({e['failed_attempts']} failed)" for e in missing)
         print(f"Check source_ips with failures: not listed by model: {details}")
+
+
+def guardrail(verdict: dict, facts: dict) -> None:
+    """Warn when the recommended action looks unsafe or misses the top risk (v5)."""
+    action = verdict.get("first_action", "")
+    warnings = []
+
+    for e in facts["source_ips"]:
+        if e["private"] and e["ip"] in action and re.search(r"\bblock", action, re.I):
+            warnings.append(f"first_action blocks internal address {e['ip']}; "
+                            "identify and check that host before blocking")
+
+    top = max(facts["source_ips"], key=lambda e: e["risk_score"], default=None)
+    if top and top["risk_level"] in ("critical", "high") and top["ip"] not in action:
+        warnings.append(f"first_action does not mention the highest-risk source {top['ip']} "
+                        f"({top['risk_level']}: {'; '.join(top['risk_reasons']) or 'see facts'})")
+
+    if not warnings:
+        print("Guardrail: OK")
+    for w in warnings:
+        print(f"Guardrail WARNING: {w}")
 
 
 def main() -> int:
@@ -231,19 +339,33 @@ def main() -> int:
         print("Error: log file is empty", file=sys.stderr)
         return 1
 
-    template_text = args.prompt.read_text(encoding="utf-8")
-    facts = extract_facts(logs) if "{facts}" in template_text else None
-    facts_text = format_facts(facts) if facts else None
-    prompt = build_prompt(args.prompt, logs, facts_text)
+    template = args.prompt.read_text(encoding="utf-8")
+    uses_facts = "{facts}" in template
+    uses_risk = "{risk_facts}" in template
+    facts = extract_facts(logs) if (uses_facts or uses_risk) else None
+    values = {"logs": logs}
+    if uses_facts:
+        values["facts"] = format_facts(facts)
+    if uses_risk:
+        values["risk_facts"] = format_risk_facts(facts)
+
+    try:
+        prompt = build_prompt(template, values)
+    except ValueError as e:
+        print(f"Error: {args.prompt}: {e}", file=sys.stderr)
+        return 1
     system = args.system.read_text(encoding="utf-8") if args.system else None
 
     print(f"Model:  {args.model}")
     print(f"Prompt: {args.prompt.name}" + (f" + system {args.system.name}" if args.system else ""))
     print(f"Output: {'JSON' if args.json else 'free text'}")
     print(f"Lines:  {logs.count(chr(10))} from {args.logfile}")
-    if facts_text:
+    if uses_risk:
+        print("Parser facts (ranked by risk):")
+        print(values["risk_facts"])
+    elif uses_facts:
         print("Parser facts:")
-        print(facts_text)
+        print(values["facts"])
     print("Analysing... (this can take a minute on a local model)\n")
 
     try:
@@ -267,6 +389,8 @@ def main() -> int:
         if facts:
             print("-" * 60)
             check_against_facts(verdict, facts)
+            if uses_risk:
+                guardrail(verdict, facts)
     else:
         print(reply.strip())
     print("=" * 60)

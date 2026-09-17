@@ -1,0 +1,7 @@
+Analyse these auth.log lines and return your verdict as JSON.
+
+Parser facts (ranked by risk, highest first):
+{risk_facts}
+
+Logs:
+{logs}
