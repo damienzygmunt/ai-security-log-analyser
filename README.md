@@ -16,6 +16,8 @@ Authentication logs contain usernames, IP addresses and hostnames. Sending them 
 4. **Model** – sends the request to Ollama's local API (`localhost:11434`).
 5. **Output** – prints either a free-text answer (v1) or a JSON verdict (v2+) that is validated in Python.
 6. **Cross-check** (v4) – compares the model's `failed_attempts` and `source_ips` with the parser's results and prints OK or MISMATCH.
+7. **Risk ranking** (v5) – the parser flags a successful login after 3+ failures from the same IP (possible compromise), records `sudo` commands that account ran afterwards, and scores each source (critical/high/medium/low/none) with reasons. Sources are passed to the model in ranked order.
+8. **Guardrail** (v5) – warns if the model's `first_action` blocks a private IP or doesn't address the highest-risk source.
 
 Design choices:
 
@@ -24,6 +26,7 @@ Design choices:
 - Prompts live in separate files under `prompts/`, so each version is tracked in Git.
 - Placeholders are filled in a single regex pass rather than with `str.format`, so braces or placeholder-like text inside log lines can't alter the prompt.
 - Counting and IP classification are done in code, not by the model, because the model got the count wrong in v2 and v3.
+- Risk ranking is done in code, because in v4 the model focused on the noisiest source and missed a compromise. v4's `{facts}` output is unchanged; v5 uses a separate `{risk_facts}` placeholder so earlier results stay reproducible.
 
 ## Requirements
 
@@ -57,13 +60,19 @@ v4 – passes parser facts to the model and cross-checks the verdict (used autom
 python analyser.py auth.log --system prompts/v4_system.txt --prompt prompts/v4_user.txt --json
 ```
 
+v5 – passes risk-ranked facts and runs the guardrail (used when the prompt contains `{risk_facts}`):
+
+```
+python analyser.py auth.log --system prompts/v5_system.txt --prompt prompts/v5_user.txt --json
+```
+
 Options:
 
 | Option | Default | Description |
 |---|---|---|
 | `--lines` | 100 | Number of lines from the end of the log to analyse |
 | `--model` | `llama3.1:8b` | Ollama model to use |
-| `--prompt` | `prompts/v1.txt` | Prompt template containing `{logs}` (and optionally `{facts}`) |
+| `--prompt` | `prompts/v1.txt` | Prompt template containing `{logs}` (and optionally `{facts}` or `{risk_facts}`) |
 | `--system` | none | Optional system prompt file |
 | `--json` | off | Require JSON output matching the verdict schema |
 | `--ctx` | 8192 | Model context size in tokens |
@@ -89,7 +98,7 @@ Example v2 output:
 **2. Multi-IP sample (`samples/multi_ip_auth.log`).** A synthetic 80-line log with five sources: an external brute force, a quiet external source that succeeds and then runs `sudo cat /etc/shadow`, a failing internal backup account, and two normal users. The correct answer was written before testing in [samples/multi_ip_expected.md](samples/multi_ip_expected.md). The main test is prioritisation: the loudest source is not the most dangerous one.
 
 ```
-python analyser.py samples/multi_ip_auth.log --system prompts/v4_system.txt --prompt prompts/v4_user.txt --json
+python analyser.py samples/multi_ip_auth.log --system prompts/v5_system.txt --prompt prompts/v5_user.txt --json
 ```
 
 ## Results so far
@@ -100,23 +109,24 @@ python analyser.py samples/multi_ip_auth.log --system prompts/v4_system.txt --pr
 | v2 – system prompt + JSON | Yes | Correct | Yes | 8 (wrong) | Yes |
 | v3 – counting rule + few-shot | Yes | Correct | No (called it external) | 10 (wrong) | Yes |
 | v4 – parser facts + cross-check | Yes | Correct | Yes | 12 (correct) | Yes |
+| v5 – risk ranking + guardrail | Yes, flagged possible compromise | Correct | Yes, recommended investigating the internal host | 12 (correct) | Yes |
 
-### Multi-IP sample (v4)
+### Multi-IP sample
 
-| Check | Result |
-|---|---|
-| Failed attempts (25) | Correct |
-| Lists the three suspicious sources | Correct |
-| No false positives on normal logins | Correct |
-| Notices 198.51.100.23 logged in successfully | **Missed** |
-| Notices `sudo cat /etc/shadow` after that login | **Missed** |
-| First action prioritises the compromised account | **No** – blocked the loudest source and a private IP |
+| Check | v4 | v5 |
+|---|---|---|
+| Failed attempts (25) | Correct | Correct |
+| Top priority is the compromised source (198.51.100.23) | **No** | Yes |
+| Mentions `sudo cat /etc/shadow` after that login | **No** | Yes |
+| Avoids blocking the private source | **No** | Yes |
+| First action | Block the loudest source and a private IP | Block 198.51.100.23 (right source; locking the account would be better) |
+| Normal users (alice, deploy) left out | Yes | **No** – listed in `source_ips` and `targeted_users` |
 
-The model had correct facts but focused on failure volume and missed the actual compromise, the most serious failure mode for a triage tool.
+v4 had correct facts but focused on failure volume and missed the compromise. Ranking risk in code (v5) fixed the prioritisation, but introduced over-inclusive output.
 
 ### Notes
 
-On the real log, v4 also flagged the successful login after the failures as a sign of possible compromise. Its recommended action was still to block the private IP, which the system prompt told it not to do first.
+On the real log, v4 also flagged the successful login after the failures as a sign of possible compromise. v5 was the first version to recommend investigating the internal host rather than blocking it, but it wrongly claimed that earlier console `sudo` commands were run after the suspicious login. The parser had found none; the model linked unrelated raw log lines itself. Its recommended action was still to block the private IP, which the system prompt told it not to do first.
 
 Full notes in [PROMPT_NOTES.md](PROMPT_NOTES.md).
 
@@ -125,8 +135,12 @@ Full notes in [PROMPT_NOTES.md](PROMPT_NOTES.md).
 - Only the last N lines are analysed, so earlier activity can be missed.
 - Without parser facts (v1–v3), the model miscounts failed attempts, particularly `message repeated N times` lines. v4 fixes this by counting in code.
 - The model doesn't reliably follow reasoning rules: even in v4 it recommended blocking a private IP.
-- The model can miss a compromise even when the facts show it: on the multi-IP sample it ignored a successful login after failures and prioritised the noisiest source.
-- The parser doesn't yet capture what happens after a login (e.g. `sudo` commands).
+- Without risk ranking (v4), the model missed a compromise even when the facts showed it.
+- With raw log lines in the prompt, the model can connect unrelated events (v5 attributed earlier console `sudo` commands to a later SSH login).
+- v5 lists normal users in `source_ips`/`targeted_users`.
+- The guardrail only checks two rules (blocking a private IP, ignoring the top-risk source) and passes verdicts with other errors.
+- Risk scores and thresholds (e.g. 3 failures before a success) are simple hand-set rules, not tuned on real data.
+- `sudo` commands are linked to a suspicious login by username and order in the log, not by session.
 - The parser only recognises `Failed password`, `message repeated` and `Accepted` lines. Other auth events (e.g. `Invalid user` without a password attempt) aren't counted.
 - Python's `is_private` also treats reserved and documentation ranges (e.g. 192.0.2.0/24) as private.
 - With few-shot examples, the model copies example wording instead of applying the reasoning (v3 repeated Example 1's "block at the firewall" action for a private IP).
@@ -143,10 +157,12 @@ Full notes in [PROMPT_NOTES.md](PROMPT_NOTES.md).
 - [x] v4: classify private vs public IPs in Python (`ipaddress` module)
 - [x] v4: cross-check the model's verdict against the parser
 - [x] Test log with multiple IPs (public and private) and normal logins mixed in
-- [ ] Flag "failed then successful login" in code as a compromise indicator
-- [ ] Capture `sudo` commands after suspicious logins
-- [ ] Rank sources by risk in code and pass the ranking to the model
-- [ ] Python guardrail for unsafe recommended actions (e.g. blocking a private IP)
+- [x] v5: flag "failed then successful login" in code as a compromise indicator
+- [x] v5: capture `sudo` commands after suspicious logins
+- [x] v5: rank sources by risk in code and pass the ranking to the model
+- [x] v5: guardrail for unsafe recommended actions (blocking a private IP, ignoring the top risk)
+- [ ] Test sending facts only (no raw log lines)
+- [ ] Guardrail check for normal sources listed as suspicious
 - [ ] Prompt-injection testing and defences
 
 ## Licence
