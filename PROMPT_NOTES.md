@@ -172,3 +172,43 @@ code and flagged explicitly, not left for the model to notice.
 - Parser: flag "failed then successful login from same IP" as a compromise indicator
 - Parser: capture sudo commands run after a suspicious login
 - Rank sources by risk in code and pass that ranking to the model
+
+## v5 – risk ranking + guardrail (prompts/v5_system.txt, prompts/v5_user.txt)
+Parser now flags a successful login after 3+ failures from the same IP,
+captures sudo commands run by that account afterwards, and ranks sources by a
+risk score (critical/high/medium/low/none) with reasons. Sources are passed to
+the model in ranked order. After the verdict, a guardrail warns if first_action
+blocks a private IP or ignores the highest-risk source. Tested on both logs.
+
+### Multi-IP sample
+Improved over v4:
+- Summary opens with 198.51.100.23 as CRITICAL and mentions cat /etc/shadow
+- first_action targets 198.51.100.23; no private IP blocked. Guardrail OK
+- failed_attempts 25, all checks OK
+Still weak / new problems:
+- first_action is "block 198.51.100.23". The attacker is already in, so locking
+  the sysadmin account and ending its session should come first
+- Summary says "attempted to login" rather than stating the login succeeded
+- Regression: source_ips and targeted_users now include the normal users
+  (alice, deploy) and their IPs, which v4 correctly left out
+
+### Real auth.log
+Improved:
+- States the sysadmin account may be compromised; count 12 correct
+- first_action: "investigate the internal machine with IP 10.0.3.2". First
+  version to follow the private-IP rule
+New problem:
+- Summary claims sensitive commands (systemctl start ssh, ufw status, tail
+  auth.log) were run after the suspicious login. The parser found no sudo
+  commands after that login; these were my own earlier console commands. The
+  model took them from the raw log and invented the link
+
+### Takeaway
+Ranking in code fixed prioritisation and private-IP handling. But with raw log
+lines still in the prompt, the model can pull unrelated events in and connect
+them wrongly. The guardrail only catches the rules it checks for.
+
+### Next
+- Test sending facts only (no raw log lines) to see if invented links disappear
+- Extend checks: flag normal (risk none/low) sources listed in source_ips
+- Prompt-injection testing
