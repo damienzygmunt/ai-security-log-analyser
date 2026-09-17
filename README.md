@@ -84,7 +84,13 @@ Example v2 output:
 
 ## Test data
 
-Logs come from my own Ubuntu Server VM. I generated repeated failed SSH logins against the `sysadmin` account, so the correct answer is known: SSH brute force from one source (10.0.3.2, the VirtualBox NAT address for the host), 12 failed attempts in the last 100 lines, followed by 1 successful login (my own, later). Log files are excluded from the repo via `.gitignore`.
+**1. Real log (`auth.log`, not committed).** Logs come from my own Ubuntu Server VM. I generated repeated failed SSH logins against the `sysadmin` account, so the correct answer is known: SSH brute force from one source (10.0.3.2, the VirtualBox NAT address for the host), 12 failed attempts in the last 100 lines, followed by 1 successful login (my own, later). Real log files are excluded from the repo via `.gitignore`.
+
+**2. Multi-IP sample (`samples/multi_ip_auth.log`).** A synthetic 80-line log with five sources: an external brute force, a quiet external source that succeeds and then runs `sudo cat /etc/shadow`, a failing internal backup account, and two normal users. The correct answer was written before testing in [samples/multi_ip_expected.md](samples/multi_ip_expected.md). The main test is prioritisation: the loudest source is not the most dangerous one.
+
+```
+python analyser.py samples/multi_ip_auth.log --system prompts/v4_system.txt --prompt prompts/v4_user.txt --json
+```
 
 ## Results so far
 
@@ -95,7 +101,22 @@ Logs come from my own Ubuntu Server VM. I generated repeated failed SSH logins a
 | v3 – counting rule + few-shot | Yes | Correct | No (called it external) | 10 (wrong) | Yes |
 | v4 – parser facts + cross-check | Yes | Correct | Yes | 12 (correct) | Yes |
 
-v4 also flagged the successful login after the failures as a sign of possible compromise. Its recommended action was still to block the private IP, which the system prompt told it not to do first.
+### Multi-IP sample (v4)
+
+| Check | Result |
+|---|---|
+| Failed attempts (25) | Correct |
+| Lists the three suspicious sources | Correct |
+| No false positives on normal logins | Correct |
+| Notices 198.51.100.23 logged in successfully | **Missed** |
+| Notices `sudo cat /etc/shadow` after that login | **Missed** |
+| First action prioritises the compromised account | **No** – blocked the loudest source and a private IP |
+
+The model had correct facts but focused on failure volume and missed the actual compromise, the most serious failure mode for a triage tool.
+
+### Notes
+
+On the real log, v4 also flagged the successful login after the failures as a sign of possible compromise. Its recommended action was still to block the private IP, which the system prompt told it not to do first.
 
 Full notes in [PROMPT_NOTES.md](PROMPT_NOTES.md).
 
@@ -104,10 +125,12 @@ Full notes in [PROMPT_NOTES.md](PROMPT_NOTES.md).
 - Only the last N lines are analysed, so earlier activity can be missed.
 - Without parser facts (v1–v3), the model miscounts failed attempts, particularly `message repeated N times` lines. v4 fixes this by counting in code.
 - The model doesn't reliably follow reasoning rules: even in v4 it recommended blocking a private IP.
+- The model can miss a compromise even when the facts show it: on the multi-IP sample it ignored a successful login after failures and prioritised the noisiest source.
+- The parser doesn't yet capture what happens after a login (e.g. `sudo` commands).
 - The parser only recognises `Failed password`, `message repeated` and `Accepted` lines. Other auth events (e.g. `Invalid user` without a password attempt) aren't counted.
 - Python's `is_private` also treats reserved and documentation ranges (e.g. 192.0.2.0/24) as private.
 - With few-shot examples, the model copies example wording instead of applying the reasoning (v3 repeated Example 1's "block at the firewall" action for a private IP).
-- Test data so far has a single source IP, so multi-source detection and false positives aren't yet tested.
+- The verdict schema has a single `attack_type` and `first_action`, which is limiting when a log contains several different incidents.
 - Only `auth.log` format is supported.
 - Log content is passed to the model, so crafted log lines could attempt prompt injection. Not yet tested.
 
@@ -119,7 +142,10 @@ Full notes in [PROMPT_NOTES.md](PROMPT_NOTES.md).
 - [x] v4: compute exact counts per IP in Python and pass them to the model
 - [x] v4: classify private vs public IPs in Python (`ipaddress` module)
 - [x] v4: cross-check the model's verdict against the parser
-- [ ] Test logs with multiple IPs (public and private) and normal logins mixed in
+- [x] Test log with multiple IPs (public and private) and normal logins mixed in
+- [ ] Flag "failed then successful login" in code as a compromise indicator
+- [ ] Capture `sudo` commands after suspicious logins
+- [ ] Rank sources by risk in code and pass the ranking to the model
 - [ ] Python guardrail for unsafe recommended actions (e.g. blocking a private IP)
 - [ ] Prompt-injection testing and defences
 
