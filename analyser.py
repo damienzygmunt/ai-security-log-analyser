@@ -10,10 +10,16 @@ Usage:
 
     v2 (system prompt, structured JSON answer):
         python analyser.py auth.log --system prompts/v2_system.txt --prompt prompts/v2_user.txt --json
+
+    v4 (parser facts passed to the model; used automatically when the
+        prompt template contains {facts}):
+        python analyser.py auth.log --system prompts/v4_system.txt --prompt prompts/v4_user.txt --json
 """
 
 import argparse
+import ipaddress
 import json
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -50,13 +56,93 @@ def read_last_lines(log_path: Path, n: int) -> str:
         return "".join(deque(f, maxlen=n))
 
 
-def build_prompt(template_path: Path, logs: str) -> str:
-    """Insert the log lines into the prompt template at {logs}."""
+# --- Log parsing -----------------------------------------------------------
+
+IP = r"(?P<ip>[0-9A-Fa-f:.]+)"
+USER = r"(?:invalid user )?(?P<user>\S+)"
+FAILED_RE = re.compile(rf"(?<!\[ )Failed password for {USER} from {IP} port")
+REPEATED_RE = re.compile(rf"message repeated (?P<n>\d+) times: \[ Failed password for {USER} from {IP} port")
+ACCEPTED_RE = re.compile(rf"Accepted \S+ for {USER} from {IP} port")
+TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T[\d:.]+\S*|\w{3}\s+\d+\s[\d:]+)")
+
+
+def extract_facts(logs: str) -> dict:
+    """Count failed and successful SSH logins per source IP.
+
+    A 'message repeated N times: [ Failed password ... ]' line stands for
+    N further failures. Other lines that describe the same attempts again
+    (PAM summaries, connection resets) are deliberately not counted.
+    """
+    per_ip = {}
+
+    def record(ip_text, user, failed=0, accepted=0, timestamp=None):
+        try:
+            ip = ipaddress.ip_address(ip_text)
+        except ValueError:
+            return
+        entry = per_ip.setdefault(str(ip), {
+            "ip": str(ip),
+            # Note: is_private is also True for reserved/documentation ranges
+            # (e.g. 192.0.2.0/24), so test data should use real public IPs
+            "private": ip.is_private,
+            "failed_attempts": 0,
+            "successful_logins": 0,
+            "users": set(),
+            "first_seen": timestamp,
+            "last_seen": timestamp,
+        })
+        entry["failed_attempts"] += failed
+        entry["successful_logins"] += accepted
+        entry["users"].add(user)
+        if timestamp:
+            entry["first_seen"] = entry["first_seen"] or timestamp
+            entry["last_seen"] = timestamp
+
+    for line in logs.splitlines():
+        ts_match = TIMESTAMP_RE.match(line)
+        ts = ts_match.group(1) if ts_match else None
+        if m := REPEATED_RE.search(line):
+            record(m["ip"], m["user"], failed=int(m["n"]), timestamp=ts)
+        elif m := FAILED_RE.search(line):
+            record(m["ip"], m["user"], failed=1, timestamp=ts)
+        elif m := ACCEPTED_RE.search(line):
+            record(m["ip"], m["user"], accepted=1, timestamp=ts)
+
+    ips = sorted(per_ip.values(), key=lambda e: e["failed_attempts"], reverse=True)
+    for entry in ips:
+        entry["users"] = sorted(entry["users"])
+    return {
+        "total_failed_attempts": sum(e["failed_attempts"] for e in ips),
+        "total_successful_logins": sum(e["successful_logins"] for e in ips),
+        "source_ips": ips,
+    }
+
+
+def format_facts(facts: dict) -> str:
+    """Turn the parsed facts into plain lines for the prompt."""
+    if not facts["source_ips"]:
+        return "- No SSH login attempts found."
+    lines = [
+        f"- {e['ip']} ({'private' if e['private'] else 'public'} address): "
+        f"{e['failed_attempts']} failed attempts, {e['successful_logins']} successful logins, "
+        f"users: {', '.join(e['users'])}, first seen {e['first_seen']}, last seen {e['last_seen']}"
+        for e in facts["source_ips"]
+    ]
+    lines.append(f"- Total failed attempts: {facts['total_failed_attempts']}")
+    lines.append(f"- Total successful logins: {facts['total_successful_logins']}")
+    return "\n".join(lines)
+
+
+# --- Prompting ---------------------------------------------------------------
+
+def build_prompt(template_path: Path, logs: str, facts_text: str | None = None) -> str:
+    """Fill the {logs} (and optional {facts}) placeholders in the template."""
     template = template_path.read_text(encoding="utf-8")
     if "{logs}" not in template:
         raise ValueError(f"{template_path} has no {{logs}} placeholder")
-    # str.replace rather than str.format: log lines can contain braces
-    return template.replace("{logs}", logs)
+    values = {"logs": logs, "facts": facts_text or ""}
+    # Single pass, so text inside the logs can never be treated as a placeholder
+    return re.sub(r"\{(logs|facts)\}", lambda m: values[m.group(1)], template)
 
 
 def ask_ollama(prompt: str, model: str, num_ctx: int,
@@ -95,6 +181,19 @@ def parse_verdict(text: str) -> dict:
     return verdict
 
 
+def check_against_facts(verdict: dict, facts: dict) -> None:
+    """Compare the model's verdict with the parser's exact results."""
+    expected = facts["total_failed_attempts"]
+    got = verdict.get("failed_attempts")
+    status = "OK" if got == expected else "MISMATCH"
+    print(f"Check failed_attempts: model {got}, parser {expected} -> {status}")
+
+    expected_ips = {e["ip"] for e in facts["source_ips"] if e["failed_attempts"]}
+    got_ips = set(verdict.get("source_ips", []))
+    status = "OK" if expected_ips <= got_ips else "MISSING " + ", ".join(sorted(expected_ips - got_ips))
+    print(f"Check source_ips with failures: {status}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="LLM-assisted triage of Linux auth logs")
     parser.add_argument("logfile", type=Path, help="path to auth.log")
@@ -116,13 +215,19 @@ def main() -> int:
         print("Error: log file is empty", file=sys.stderr)
         return 1
 
-    prompt = build_prompt(args.prompt, logs)
+    template_text = args.prompt.read_text(encoding="utf-8")
+    facts = extract_facts(logs) if "{facts}" in template_text else None
+    facts_text = format_facts(facts) if facts else None
+    prompt = build_prompt(args.prompt, logs, facts_text)
     system = args.system.read_text(encoding="utf-8") if args.system else None
 
     print(f"Model:  {args.model}")
     print(f"Prompt: {args.prompt.name}" + (f" + system {args.system.name}" if args.system else ""))
     print(f"Output: {'JSON' if args.json else 'free text'}")
     print(f"Lines:  {logs.count(chr(10))} from {args.logfile}")
+    if facts_text:
+        print("Parser facts:")
+        print(facts_text)
     print("Analysing... (this can take a minute on a local model)\n")
 
     try:
@@ -143,6 +248,9 @@ def main() -> int:
             print(f"Invalid JSON from model: {e}\nRaw reply:\n{reply}", file=sys.stderr)
             return 1
         print(json.dumps(verdict, indent=2))
+        if facts:
+            print("-" * 60)
+            check_against_facts(verdict, facts)
     else:
         print(reply.strip())
     print("=" * 60)
