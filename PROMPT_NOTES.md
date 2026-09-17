@@ -109,3 +109,34 @@ unreliable even with explicit rules, so it belongs in code.
 - Compute failed attempts per IP in Python and pass the counts to the model
 - Check private vs public IPs in Python (ipaddress module) instead of relying on the model
 - Test with a log containing public IPs and legitimate logins
+
+## v4 – parser facts (prompts/v4_system.txt, prompts/v4_user.txt)
+Built on v2 (not v3, since v3's examples caused copying). Python now parses the
+log and passes exact facts to the model: failed and successful logins per IP,
+users, first/last seen, and private/public classification (ipaddress module).
+After the verdict, the script checks the model's failed_attempts and source_ips
+against the parser.
+
+### What improved
+- failed_attempts: 12, correct (v2: 8, v3: 10). Cross-check reported OK
+- Summary describes 10.0.3.2 as private, not external
+- Parser found 1 successful login from 10.0.3.2 after the failures (my own later
+  login). The model used this: "12 failed logins before successfully logging in",
+  which is the pattern of a possible account compromise
+
+### What didn't
+- first_action was still "block 10.0.3.2", ignoring the system prompt rule to
+  identify the internal machine first. With a success after failures, the right
+  first step is to check whether that login was legitimate
+- attack_type "password cracking" is imprecise; this was online password
+  guessing (brute force), not offline hash cracking
+
+### Takeaway
+Moving counting and IP classification into code fixed the factual errors.
+The model is reliable at summarising given facts, but still doesn't reliably
+follow reasoning rules for the recommended action.
+
+### Next
+- Test with a log that has multiple IPs (public and private) and a normal login
+- Consider a Python guardrail that flags a "block" action for private IPs
+- Prompt-injection testing
