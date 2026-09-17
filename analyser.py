@@ -324,6 +324,15 @@ def check_against_facts(verdict: dict, facts: dict) -> None:
         details = ", ".join(f"{e['ip']} ({e['failed_attempts']} failed)" for e in missing)
         print(f"Check source_ips with failures: not listed by model: {details}")
 
+    # IPs the model reports that never connected (invented, or spoofed via log text)
+    seen_ips = {e["ip"] for e in facts["source_ips"]}
+    unknown = sorted(got_ips - seen_ips)
+    if unknown:
+        print(f"Check source_ips not in log: {', '.join(unknown)} -> MISMATCH "
+              "(model listed IPs that never connected)")
+    else:
+        print("Check source_ips not in log: OK")
+
 
 def guardrail(verdict: dict, facts: dict) -> None:
     """Warn when the recommended action looks unsafe or misses the top risk (v5)."""
